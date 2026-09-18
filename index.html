@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>In cucurbitam transformans</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #000; overflow: hidden;
+    font-family: 'Georgia', serif; cursor: pointer;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(120,0,200,0.22), transparent 55%),
+      radial-gradient(circle at 80% 80%, rgba(255,120,0,0.18), transparent 55%),
+      #000;
+  }
+
+  #start {
+    font-size: 5rem;
+    line-height: 1;
+    padding: 25px 35px;
+    border: 2px solid #a020f0;
+    border-radius: 24px;
+    background: rgba(30,0,50,0.6);
+    box-shadow: 0 0 30px #a020f0, inset 0 0 25px rgba(255,123,0,0.35);
+    animation: pulse 2s infinite alternate;
+    user-select: none;
+  }
+  @keyframes pulse {
+    from { transform: scale(1);    box-shadow: 0 0 25px #a020f0, inset 0 0 18px rgba(255,123,0,0.35); }
+    to   { transform: scale(1.08); box-shadow: 0 0 55px #ff7b00, inset 0 0 30px rgba(160,32,240,0.6); }
+  }
+
+  #magic, #burst {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #magic canvas, #burst canvas {
+    width: 100%; height: 100%; display: block;
+  }
+
+  #reveal {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transform: scale(0.85);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+    pointer-events: none; z-index: 10;
+  }
+  #reveal.show { opacity: 1; transform: scale(1); }
+  #reveal img {
+    max-width: 90vw; max-height: 90vh;
+    border-radius: 16px;
+    box-shadow: 0 0 60px #a020f0, 0 0 120px #ff7b00;
+    filter: drop-shadow(0 0 20px rgba(255,123,0,0.6));
+  }
+</style>
+</head>
+<body>
+
+  <div id="start">🎃</div>
+
+  <div id="magic"><canvas id="magicCanvas"></canvas></div>
+  <div id="burst"><canvas id="burstCanvas"></canvas></div>
+
+  <div id="reveal">
+    <img id="revealImg"
+      src="https://cdn.jsdelivr.net/gh/markbartolomeev-blip/Tulenoween-In_cucurbitam_transformans@main/1298EABF-3E0D-4DBC-8D89-66778146A897.png"
+      crossorigin="anonymous"
+      alt="In cucurbitam transformans">
+  </div>
+
+  <audio id="audio" preload="auto"
+    src="https://cdn.jsdelivr.net/gh/markbartolomeev-blip/Tulenoween-In_cucurbitam_transformans@main/copy_BD291BC3-BC51-4EAD-9372-5E954705694C%20(online-audio-converter.com).mp3"></audio>
+
+<script>
+const REVEAL_MS = 28000;        // ровно 28 секунда
+const SPAWN_EVERY_MS = 70;      // частота рождения частиц
+const MAX_PARTICLES = 260;      // потолок, чтобы не замыливалось
+const VORTEX_RADIUS = 420;      // стартовый радиус спирали (px, макс.)
+
+const startEl  = document.getElementById('start');
+const audio    = document.getElementById('audio');
+const revealEl = document.getElementById('reveal');
+
+const magicCanvas = document.getElementById('magicCanvas');
+const mctx = magicCanvas.getContext('2d');
+const burstCanvas = document.getElementById('burstCanvas');
+const bctx = burstCanvas.getContext('2d');
+
+let W = 0, H = 0, CX = 0, CY = 0;
+function resize(){
+  W = innerWidth; H = innerHeight;
+  CX = W / 2; CY = H / 2;
+  magicCanvas.width = W; magicCanvas.height = H;
+  burstCanvas.width = W; burstCanvas.height = H;
+}
+resize(); addEventListener('resize', resize);
+
+/* ===== Частицы-вихрь ===== */
+let particles = [];
+let gathering = false;
+let spawnTimer = null;
+let rafId = null;
+let startTime = 0;
+
+function createParticle(){
+  // старт — на внешнем радиусе, случайный угол
+  const startAngle = Math.random() * Math.PI * 2;
+  const startRadius = Math.min(W, H) * 0.55 + Math.random() * 120;
+
+  // фиолетовые — по часовой, оранжевые — против (спираль-водоворот)
+  const isPurple = Math.random() < 0.55;
+  const dir = isPurple ? 1 : -1;
+
+  // разные скорости вращения и схождения — слои спирали
+  const angularSpeed = (0.010 + Math.random() * 0.020) * dir;
+  const shrinkSpeed  = 0.0022 + Math.random() * 0.0030; // медленное схождение
+
+  return {
+    angle: startAngle,
+    radius: startRadius,
+    angularSpeed,
+    shrinkSpeed,
+    r: 1 + Math.random() * 1.8,
+    hue: isPurple ? 275 : 30,
+    light: 62 + Math.random() * 22,
+    // лёгкая индивидуальная фаза, чтобы спираль была «живой»
+    phase: Math.random() * Math.PI * 2
+  };
+}
+
+function drawGather(){
+  // лёгкий шлейф
+  mctx.fillStyle = 'rgba(0,0,0,0.28)';
+  mctx.fillRect(0, 0, W, H);
+
+  mctx.globalCompositeOperation = 'lighter';
+
+  const t = performance.now() * 0.001;
+
+  particles.forEach(p => {
+    // движение по спирали
+    p.angle += p.angularSpeed;
+    p.radius -= p.radius * p.shrinkSpeed;
+    if (p.radius < 1) p.radius = 1;
+
+    // лёгкое «дыхание» радиуса
+    const breathe = Math.sin(t * 1.5 + p.phase) * 4;
+    const rad = p.radius + breathe;
+
+    const x = CX + Math.cos(p.angle) * rad;
+    const y = CY + Math.sin(p.angle) * rad;
+
+    // рисуем точку с мягким ореолом
+    const g = mctx.createRadialGradient(x, y, 0, x, y, p.r * 3.2);
+    g.addColorStop(0, `hsla(${p.hue},100%,${p.light}%,1)`);
+    g.addColorStop(0.45, `hsla(${p.hue},100%,${p.light}%,0.5)`);
+    g.addColorStop(1, `hsla(${p.hue},100%,50%,0)`);
+    mctx.beginPath();
+    mctx.fillStyle = g;
+    mctx.arc(x, y, p.r * 3.2, 0, Math.PI * 2);
+    mctx.fill();
+  });
+
+  mctx.globalCompositeOperation = 'source-over';
+
+  if (gathering) rafId = requestAnimationFrame(drawGather);
+}
+
+function startGathering(){
+  gathering = true;
+  rafId = requestAnimationFrame(drawGather);
+
+  spawnTimer = setInterval(() => {
+    if (!gathering) return;
+    if (particles.length < MAX_PARTICLES){
+      particles.push(createParticle());
+      // иногда 2 подряд для лёгкой неравномерности
+      if (Math.random() < 0.2 && particles.length < MAX_PARTICLES){
+        particles.push(createParticle());
+      }
+    }
+  }, SPAWN_EVERY_MS);
+}
+
+function stopGathering(){
+  gathering = false;
+  if (spawnTimer){ clearInterval(spawnTimer); spawnTimer = null; }
+  if (rafId){ cancelAnimationFrame(rafId); rafId = null; }
+  mctx.clearRect(0, 0, W, H);
+  particles = [];
+}
+
+/* ===== Взрыв на 28-й секунде ===== */
+let burstParticles = [];
+let bursting = false;
+let burstRaf = null;
+
+function spawnBurst(){
+  const palette = ['#ffffff', '#a020f0', '#ff7b00'];
+  const amount = 240;
+  for (let i = 0; i < amount; i++){
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 7;
+    burstParticles.push({
+      x: CX, y: CY,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: 1.2 + Math.random() * 2.4,
+      life: 1,
+      decay: 0.010 + Math.random() * 0.014,
+      color: palette[(Math.random() * palette.length) | 0]
+    });
+  }
+}
+
+function drawBurst(){
+  bctx.clearRect(0, 0, W, H);
+  bctx.globalCompositeOperation = 'lighter';
+
+  burstParticles.forEach(p => {
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.985; p.vy *= 0.985;
+    p.life -= p.decay;
+
+    const g = bctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 3);
+    g.addColorStop(0, p.color);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    bctx.globalAlpha = Math.max(p.life, 0);
+    bctx.beginPath();
+    bctx.fillStyle = g;
+    bctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
+    bctx.fill();
+  });
+
+  bctx.globalAlpha = 1;
+  bctx.globalCompositeOperation = 'source-over';
+  burstParticles = burstParticles.filter(p => p.life > 0);
+
+  if (bursting && burstParticles.length > 0){
+    burstRaf = requestAnimationFrame(drawBurst);
+  } else {
+    bctx.clearRect(0, 0, W, H);
+    bursting = false;
+  }
+}
+
+/* ===== Старт ===== */
+let started = false;
+function onStart(){
+  if (started) return;
+  started = true;
+  startEl.style.display = 'none';
+
+  audio.play().catch(e => console.warn('audio:', e));
+  startGathering();
+
+  setTimeout(() => {
+    stopGathering();
+    revealEl.classList.add('show');
+
+    bursting = true;
+    spawnBurst();
+    burstRaf = requestAnimationFrame(drawBurst);
+  }, REVEAL_MS);
+}
+
+document.body.addEventListener('click', onStart);
+document.body.addEventListener('touchstart', onStart, { passive: true });
+</script>
+</body>
+</html>
